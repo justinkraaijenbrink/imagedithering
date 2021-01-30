@@ -1,0 +1,662 @@
+---
+title: "A Colorful Christmas:"
+subtitle: about Stats and Floyd-Steinberg Dithering
+author: "Kraaijenbrink / s2577984"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+graphics: yes
+output: 
+    pdf_document:
+      fig_caption: yes
+      keep_tex: yes
+header-includes: 
+- \usepackage{graphicx}
+- \usepackage{float}
+- \usepackage{placeins}
+- \usepackage{amsmath}
+- \newcommand{\argmin}{\operatornamewithlimits{argmin}}
+- \newcommand{\argmax}{\operatornamewithlimits{argmax}}
+---
+
+
+```{r label = setup, echo = FALSE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(
+  dev.args = list(bg = 'transparent'),
+  fig.align = "center", 
+  fig.height = 5, 
+  cache = TRUE,
+  echo = TRUE,
+  eval = FALSE
+)
+library("tidyverse")
+library("png")
+load("0_data/Model_Answer_Variables.RData")
+```
+
+Read in image:
+```{r, eval = TRUE}
+xmas <- png::readPNG(source = "0_img/xmas.png", native = FALSE)
+xmas <- xmas[, , -4]
+```
+
+```{r, eval = TRUE, include = FALSE}
+set.seed(2020)
+```
+
+# 1 About Colors: A Picture = A Data set.
+
+## 1.1
+```{r, eval = TRUE}
+pixelcols <- xmas [106, 467, ]
+
+pixel <- tibble(Color = c("Red", "Green", "Blue"), Pixel_Intensity = pixelcols)
+
+pixel
+```
+
+This pixel would be as red as Rudolph's nose!
+
+## 1.2 
+
+```{r, eval = TRUE}
+xmas_data <- tibble(row = rep(1:nrow(xmas), ncol(xmas)),
+            col = rep(1:ncol(xmas), each = nrow(xmas)),
+            red = as.vector(xmas[, , 1]),
+            green = as.vector(xmas[, , 2]),
+            blue = as.vector(xmas[, , 3]),
+            rgb_color = rgb(xmas[, , 1], xmas[, , 2], xmas[, , 3]))
+
+xmas_df$rgb_color <- as.character(xmas_df$rgb_color)
+
+all_equal(as_tibble(xmas_df), xmas_data)
+```
+
+The `all_equal(as_tibble(xmas_df), xmas_data)` evaluates to `TRUE`, so everything's fine. Note that I saved the variable `rgb_color` in the modelanswers as a character vector, since it was a factor. 
+
+## 1.3 
+
+```{r, eval = TRUE}
+unique_combs <- xmas_data %>%
+  select("red", "green", "blue") %>% 
+  unite(., "all_combs",sep = "-") %>% 
+  unique() %>% 
+  nrow()
+
+unique_cols <- xmas_data %>%
+  select("rgb_color") %>% 
+  unique() %>% 
+  nrow()
+
+unique_combs == unique_cols
+```
+
+The `TRUE` in the output hopefully speaks for itself!
+
+## 1.4
+
+```{r, eval = TRUE}
+xmas_img <- matrix(xmas_data$rgb_color, nrow = nrow(xmas), ncol = ncol(xmas))
+xmas_img <- as.raster(xmas_img)
+```
+
+```{r, eval = TRUE}
+png("0_img/xmas_img.png", width = 512, height = 382, units = "px")
+par(mar = c(0, 0, 0, 0))
+plot(xmas_img)
+dev.off()
+```
+
+\begin{center}
+\includegraphics[height = 5cm]{0_img/xmas_img.png}
+\end{center}
+
+Lovely christmas pic!
+
+\clearpage
+
+# 2 A Further Understanding of the RGB Space
+
+## 2.1
+
+```{r, eval = TRUE}
+CreateRGBColors <- function(red, green, blue, maxValue = 1){
+  
+  colors <- c(red, green, blue)
+  
+  if(sum(colors == round(colors)) == 3 & maxValue == 1){
+    stop("Color intensities must be in [0, 1]")
+  } else if(sum(colors == round(colors)) == 0 & maxValue == 255){
+    colors <- trunc(colors)
+  } else if(all(as.integer(colors * 255) %in% (0:255))){
+  
+    RoundToUneven <- function(x){
+      for(i in 1:length(x)){
+        if(trunc(x[i]) %% 2 == 0){
+          x[i] <- ceiling(x[i])
+          } else {
+          x[i] <- round(x[i])
+          }
+        }
+        return(x)
+        }
+  
+    colors <- 255 * colors
+    colors <- RoundToUneven(colors)
+    }
+  
+  hexadecimal <- c(0:9, LETTERS[1:6])
+  hdm2columns <- expand.grid(hexadecimal, hexadecimal)
+  channel <- paste0(hdm2columns[, 2], hdm2columns[, 1], sep = "")
+  
+  ind <- colors + 1
+  
+  rgbcolor <- paste0(c("#", channel[ind]), collapse = "")
+  
+  return(rgbcolor)
+}
+```
+
+I was not sure whether the function should fulfill any additional requirements with regard to displaying errors when the color intensities does not match with the `maxValue` argument. I decided to design the function such that the output resembles the output from the `rgb()` function (that displays an error when the color intensities are not in [0, 1], but `maxColorValue` is). 
+
+Show that both functions give the same output:
+```{r}
+identical(CreateRGBColors(0.5, 0.3, 0.7, maxValue = 1), 
+          rgb(0.5, 0.3, 0.7, maxColorValue = 1))
+```
+
+## 2.2
+
+```{r, eval = TRUE}
+CreatePalette <- function(K){
+  
+  if(K %in% c(8, 64, 512, 4096, 32768) == FALSE & K %in% c(3, 6, 9, 12, 15) == FALSE){
+    stop("Input K must be a one of these numbers: 
+         (8, 64, 512, 4096, 32768) or (3, 6, 9, 12, 15)")
+  }
+  
+  if(K %in% c(3, 6, 9, 12, 15) == FALSE & log2(K) %% 3 != 0){
+    stop("Your input must satisfy the following condition: log2(K) %% 3 == 0")
+  } 
+
+  if(K %in% c(8, 64, 512, 4096, 32768)){
+    K = K^(1/3)
+  }
+  
+  if(K %in% c(3, 6, 9, 12, 15)){
+    K = 2^(K/3)
+  }
+  
+  color_combs <- expand.grid(seq(0, 255, 255/(K - 1)), 
+                             seq(0, 255, 255/(K - 1)), 
+                             seq(0, 255, 255/(K - 1)))
+  
+  colnames(color_combs) <- c("Red", "Green", "Blue")
+  
+  all_colors <- apply(color_combs, 1, function(x){
+    red = x[1]
+    green = x[2]
+    blue = x[3]
+    
+    col <- CreateRGBColors(red, green, blue, maxValue = 255)
+    })
+
+  out <- list(cols = all_colors,
+              dat = color_combs)
+  
+  return(out)
+}
+```
+
+```{r}
+identical(CreatePalette(3), RGB_03bit)
+identical(CreatePalette(6), RGB_06bit)
+identical(CreatePalette(9), RGB_09bit)
+identical(CreatePalette(12), RGB_12bit)
+identical(CreatePalette(15), RGB_15bit)
+```
+
+All the `identical`-expressions above evaluate to `TRUE` (I did not include them, because that will slow down rendering).
+
+## 2.3
+
+### 2.3a
+
+I decided to put the code into a function, so that we can easily adjust things such as the number of bits.
+Input for the function is:
+
+1. an image (array)
+2. number of bits you want the picture to be compressed to
+3. maxValue (indicates whether the intensities are in [0, 1] or in [0, 255])
+
+The function output is a new array (`dim = c(382, 513, 3)`) with the compressed intensities. 
+
+```{r, eval = TRUE}
+FindClosestPaletteColor <- function(picture, n_bit, maxValue = 1){
+  if(maxValue != 1 & maxValue != 255){
+    stop("maxValue should be either 1 or 255")
+  }
+  
+  if(maxValue == 1){
+    picture <- picture * 255
+  }
+  
+  col_palette <- CreatePalette(n_bit)$dat
+  
+  closestpixel <- array(dim = dim(picture))
+  
+  for(i in 1:nrow(picture)){
+    for(j in 1:ncol(picture)){
+      pixel <- picture[i, j, ]
+      ind <- which.min(rowSums(t(pixel - t(col_palette))^2))
+      
+      closestpixel[i, j, ] <- as.numeric(col_palette[ind, ])
+    }
+  }
+  
+  return(closestpixel)
+}
+```
+
+### 2.3b 
+
+```{r, eval = TRUE}
+xmas_03bit <- FindClosestPaletteColor(n_bit = 3, picture = xmas, maxValue = 1)/255
+```
+
+```{r, eval = TRUE}
+writePNG(xmas_03bit, "0_img/xmas_03bit_img.png")
+```
+
+\begin{center}
+\includegraphics[height = 5cm]{0_img/xmas_03bit_img.png}
+\end{center}
+
+I think it works pretty fine!
+
+\clearpage
+
+# 3 Floyd-Steinberg dithering algorithm
+
+## 3.1 
+
+First, I create a Loss-function which takes as input a pixel (vector with length 3) and the number of bits you want to compress your picture to.
+This function can be used in the DitherImage-function.
+
+```{r}
+LossFunction <- function(pixel, col_palette = col_palette){
+  ind <- which.min(rowSums(t(pixel - t(col_palette))^2))
+  
+  newpixel <- as.numeric(col_palette[ind, ])
+  
+  return(newpixel)
+}
+```
+
+Creating the `DitherImage`-function, with the image-array and number of bits as inputs:
+
+```{r}
+DitherImage <- function(picture, n_bit){
+  
+  pixels <- picture
+  
+  quant_error <- array(dim = dim(picture))
+  
+  col_palette <- CreatePalette(n_bit)$dat/255
+  
+  for(i in 1:(nrow(pixels) - 1)){
+    for(j in 1:(ncol(pixels) - 1)){
+        oldpixel <- pixels[i, j, ] 
+        newpixel <- LossFunction(oldpixel, col_palette)
+        pixels[i, j, ] <- newpixel
+        quant_error[i, j, ] <- oldpixel - newpixel
+        
+        pixels[i    , j + 1, ] <-  pixels[i    , j + 1, ] + quant_error[i, j, ] * 7 / 16
+        pixels[i + 1, j + 1, ] <-  pixels[i + 1, j + 1, ] + quant_error[i, j, ] * 1 / 16
+        pixels[i + 1, j    , ] <-  pixels[i + 1, j    , ] + quant_error[i, j, ] * 5 / 16
+        pixels[i + 1, j - 1, ] <-  pixels[i + 1, j - 1, ] + quant_error[i, j, ] * 3 / 16
+      }
+  }
+
+  col_oldpixels <- pixels[, ncol(pixels), ]
+  col_newpixels <- matrix(nrow = nrow(col_oldpixels), ncol = ncol(col_oldpixels))
+  for(i in 1:nrow(col_oldpixels)){
+    col_newpixels[i, ] <- LossFunction(col_oldpixels[i, ], col_palette)
+  }
+  pixels[, ncol(pixels), ] <- col_newpixels
+  quant_error[, ncol(pixels), ] <- col_oldpixels - col_newpixels
+
+  row_oldpixels <- pixels[nrow(pixels), , ]
+  row_newpixels <- matrix(nrow = nrow(row_oldpixels), ncol = ncol(row_oldpixels))
+  for(i in 1:nrow(row_oldpixels)){
+    row_newpixels[i, ] <- LossFunction(row_oldpixels[i, ], col_palette)
+  }
+  pixels[nrow(pixels), , ] <- row_newpixels
+  quant_error[nrow(pixels), , ] <- row_oldpixels - row_newpixels
+  
+  out <- list(New_Colors = pixels,
+              Errors = 255 * quant_error,
+              Loss = sum((255 * quant_error)^2))
+  
+  return(out)
+}
+```
+
+To see whether my results are (approximately) the same as the modelanswers for the 3-bit image:
+
+```{r}
+dithered_03 <- DitherImage(xmas, n_bit = 3)
+
+all.equal(dithered_03$New_Colors, dither_03bit$img)
+```
+
+This evaluates to `TRUE`, so every entry is the same!
+
+## 3.2
+
+The value for the loss-function is decreasing, because the errors are decreasing as well. When using more bits, there are more colors to choose from, so
+the distance to the closest color will be smaller when there are more colors available. 
+
+```{r, eval = TRUE}
+x <- c(3, 9, 15)
+y <- c(log(sum(dither_03bit$err_mat^2)),
+       log(sum(dither_09bit$err_mat^2)),
+       log(sum(dither_15bit$err_mat^2)))
+
+png("0_img/logloss.png")
+plot(x, y,
+     xlab = "Number of bits",
+     ylab = "log(loss)",
+     main = "Log(loss) vs. number of bits",
+     xaxt = "n",
+     type = "b",
+     col = "blue",
+     pch = 20,
+     cex = 2,
+     lwd = 2
+     )
+axis(1, at = c(3, 9, 15), labels = c(3, 9, 15))
+dev.off()
+```
+\begin{center}
+\includegraphics[height = 10cm]{0_img/logloss.png}
+\end{center}
+
+\clearpage
+
+# 4 Statistical Computing on the Floyd-Steinberg algorithm
+
+## 4.1
+
+Writing the function:
+```{r, eval = TRUE}
+PermuteImage <- function(picture) {
+  rowind <- 1:nrow(picture)
+  colind <- 1:ncol(picture)
+  
+  rndm_pic <- picture[sample(rowind, replace = TRUE), sample(colind, replace = TRUE), ]
+  
+  rndm_pic_col <- rgb(rndm_pic[, , 1], rndm_pic[, , 2], rndm_pic[, , 3])
+  
+  out <- list(RGB_colors = rndm_pic_col, 
+              intensities = rndm_pic)
+  
+  return(out)
+}
+```
+
+Plotting the picture:
+```{r, eval = TRUE}
+permuted_img <- PermuteImage(xmas)
+```
+
+```{r, eval = TRUE}
+writePNG(permuted_img$intensities, "0_img/permuted_img.png")
+```
+
+\begin{center}
+\includegraphics[height = 5cm]{0_img/permuted_img.png}
+\end{center}
+
+## 4.2 
+
+First, I have to rewrite my loss-function, so that it can be applied to entire images. Not the most efficient way, but the code at Exercise 3 works so I don't want to touch it anymore. Hope you will understand!
+
+```{r}
+FindCloseColor <- function(picture, n_bit, maxValue = 1){
+  
+  col_palette <- CreatePalette(n_bit)$dat/255
+  
+  pixel <- cbind(as.vector(picture[, , 1]), 
+                 as.vector(picture[, , 2]),
+                 as.vector(picture[, , 3]))
+  newpixel <- matrix(nrow = nrow(pixel), ncol = ncol(pixel))
+  
+  for(i in 1:nrow(pixel)){
+    ind <- which.min(rowSums(t(pixel[i, ] - t(col_palette))^2))
+    newpixel[i, ] <- as.numeric(col_palette[ind, ])
+  }
+  
+  newpixel <- array(newpixel, dim = dim(picture))
+
+  return(newpixel)
+}
+```
+
+```{r}
+ReplicateLogLoss <- function(image, K_values, B){
+  if(sum((K_values %in% 2^(3 * (1:5))) == 0)){
+    stop("The values of K must be in (8, 64, 512, 4096, 32768)")
+  }
+  
+  replicates <- replicate(B, PermuteImage(image)$intensities)
+
+  out <- parallel::mclapply(1:B, function(x){
+    
+    rndm_colors <- replicates[, , , x]
+  
+    parallel::mclapply(K_values, function(y){
+      K <- log2(y)
+      reduced_colors <- FindCloseColor(rndm_colors, K, maxValue = 1)
+      loss <- log(sum((255 * rndm_colors - 255 * reduced_colors)^2))
+      out <- list(bit = K,
+                  loss = loss)
+      }, mc.cores = length(K_values))
+  }, mc.cores = length(1:B))
+  
+  return(out)
+}
+```
+
+To test whether the code works, I plug in $K = (64, 4096)$ and $B = 2$:
+```{r}
+ReplicateLogLoss(xmas, K_values = c(64, 4096), B = 2)
+```
+
+## 4.3
+
+We need some additional packages:
+```{r, eval = TRUE}
+library(ggplot2)
+library(gridExtra)
+```
+
+Prepare data for H0:
+```{r, eval = TRUE}
+B <- length(xmas_replicates_logloss)
+
+logloss_h0 <- vector(mode = "list", length = 5)
+
+for(b in 1:B){
+  logloss_h0[[1]][b] <- xmas_replicates_logloss[[b]][[1]]$logloss
+  logloss_h0[[2]][b] <- xmas_replicates_logloss[[b]][[2]]$logloss
+  logloss_h0[[3]][b] <- xmas_replicates_logloss[[b]][[3]]$logloss
+  logloss_h0[[4]][b] <- xmas_replicates_logloss[[b]][[4]]$logloss
+  logloss_h0[[5]][b] <- xmas_replicates_logloss[[b]][[5]]$logloss
+}
+x <- c(3, 6, 9, 12, 15)
+y_h0 <- sapply(logloss_h0, function(x) { sum(x)/100 })
+```
+
+Prepare data for Observed:
+```{r, eval = TRUE}
+logloss_obs <- vector(mode = "list", length = 5)
+
+logloss_obs[[1]] <- dither_03bit$err_mat
+logloss_obs[[2]] <- dither_06bit$err_mat
+logloss_obs[[3]] <- dither_09bit$err_mat
+logloss_obs[[4]] <- dither_12bit$err_mat
+logloss_obs[[5]] <- dither_15bit$err_mat
+
+y_obs <- sapply(logloss_obs, function(x){ log(sum(x^2)) })
+```
+
+Prepare data for Gap:
+```{r, eval = TRUE}
+gap_stat <- y_h0 - y_obs
+SE_gap <- sqrt(1 + 1/B)
+error_bars <- sapply(logloss_h0, function(x) { 2 * (sqrt(1 + 1/B) * sd(x)) })
+```
+
+Create dataframes for plotting:
+```{r, eval = TRUE}
+plotdata <- data.frame(bit = rep(x, 2),
+                       log_loss = c(y_h0, y_obs),
+                       type = rep(c("h_0", "observed"), each = 5))
+
+gapdata <- data.frame(bit = x,
+                      Gap = gap_stat,
+                      SE = error_bars,
+                      SE_plus = gap_stat + error_bars,
+                      SE_min = gap_stat - error_bars)
+```
+
+Actual plotting:
+```{r, eval = TRUE}
+loss_plot <- ggplot(data = plotdata, aes(bit, log_loss, group = type)) +
+  geom_line(aes(color = type)) + 
+  geom_point(aes(color = type), lwd = 4) +
+  scale_color_manual(values = c("red", "blue")) +
+  ggtitle("Loss: H0 and Observed Data") +
+  theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+gap_plot <- ggplot(data = gapdata, aes(bit, Gap)) +
+  geom_errorbar(data = gapdata, 
+                aes(ymax = SE_plus, ymin = SE_min),
+                color = "red",
+                linetype = "dashed") + 
+  geom_line() + 
+  geom_point(lwd = 4) + 
+  scale_x_continuous(breaks = x) +
+  ggtitle("Results Gap Statistic") +
+  theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+grid.arrange(loss_plot, gap_plot, nrow = 1)
+
+```
+
+### 4.5
+
+First of all, the GAP-statistic is 'the difference between the expectation of the natural logarithm of the value of the loss function under $H_0$ on the one hand, and the observed value of the natural logarithm of the loss for our observed data, on the other hand'. To find the optimal number of colors $\widehat{K}$, we want to maximize this GAP-statistic. In fact, it is a measure of the optimal tradeoff between the bias and variance of a prediction. Let me explain that a bit further.
+
+We compare the logloss of a 1000 random permutations of the n-bit picture with the observed data, which is an n-bit picture `xmas.png`. In fact, we build a model based on the n-bit RGB-color palette, and compare the predictions for the expected logloss under $H_0$ with the logloss of the clustered picture. A clustered picture consists of areas of pixels with colors that are close to each other (i.e., small Euclidean distance), and therefore will be assigned the same color from the n-bit RGB-palette. With a too small amount of clusters, the predictions for the clusters will on average be more often wrong, so the bias in predictions is higher. However, the variance will be lower, because there are less clusters to choose from. With the 3-bit picture, we have only $2^3 = 8$ colors (or predictors) in our model, which is apparently much to low, resulting in a small low GAP-statistic.
+
+The same reasoning, but then kind of inversed, holds for using too many colors (say $n = 15$). With $2^15 = 32768$ colors (or predictors), we will be on average more often correct in classifying the right cluster and therefore have low bias. However, the variance is bigger in such a situation (I am not exactly sure why this is, but very intelligent people often write down things such as 'trivial' at the point where you want more explanation as a reader). I think the higher variability just comes from the fact that there are more colors/clusters, so it will also vary more. Taken this all together, the difference in expected logloss under $H_0$ and the logloss of the observed 15-bit picture, will not be optimized for a large amount of colors.
+
+\clearpage
+
+## 5. Bonus: Something new, the package `Rcpp` (15 points)
+
+```{r}
+library(Rcpp)
+```
+
+When using the `sourceCpp`-function:
+```{r}
+sourceCpp("0_data/ditherimage.cpp")
+```
+
+When using the `cppFunction`-function, see below. Note that I decided to make the loss-function slightly different, 
+because subtracting vectors in C++ is quite annoying in comparison to R. 
+
+```{r}
+cppFunction('List DitherImageC(NumericMatrix image, int nbit = 3) {
+  
+  nbit = pow(2, nbit/3);
+  NumericMatrix pixels = clone(image);
+  int nrow = pixels.nrow(), ncol = pixels.ncol();
+  NumericMatrix errors(nrow-2, ncol-2);
+  float loss = 0;
+  
+  // Dither image:
+  
+  for (int i = 1; i < nrow-1; i++) {
+    for (int j = 1; j < ncol-1; j++) {
+      int P = trunc(nbit * (pixels(i, j) + 0.5/nbit))/nbit;
+      double e = pixels(i, j) - P;
+      errors(i, j) = e;
+      pixels(i, j) = P;
+      pixels(i, j+1) = pixels(i, j+1) + (e * 7/16);
+      pixels(i+1, j-1) = pixels(i+1, j-1) + (e * 3/16);
+      pixels(i+1, j) = pixels(i+1, j) + (e * 5/16);
+      pixels(i+1, j+1) = pixels(i+1, j+1) + (e * 1/16);
+      
+      // Find loss for whole picture (except last row and column):
+      
+      float pixel_loss = pow(e * 255, 2);
+      
+      loss += pixel_loss;
+      }
+  }
+    
+  // Dither last row and column:
+    
+  NumericMatrix::Column last_col = pixels( _ , ncol-1);
+  NumericMatrix::Row last_row = pixels( nrow-1, _ );
+    
+  last_col = trunc(last_col + 0.5);
+  last_row = trunc(last_row + 0.5);
+    
+  // Find loss for last row and column:
+  
+  float last_col_loss = sum(pow((255 * (image( _, ncol-1) - last_col)), 2));
+  loss += last_col_loss;
+  float last_row_loss = sum(pow((255 * (image(nrow-1, _ ) - last_row)), 2));
+  loss += last_row_loss;
+  
+  
+  // Create output list:
+  
+  List out = List::create(Named("New_Colors") = pixels,
+                          Named("Errors") = errors,
+                          Named("Loss") = loss);
+      
+  return out;
+}')
+```
+
+I did not manage to output a 3D array. To obtain the full RGB-color palette, we must apply a somewhat cumbersome procedure. For each R, G, and B matrix, we run the `DitherImageC`-function:
+```{r}
+newcolormat <- array(dim = dim(xmas))
+
+for(color in 1:3) {
+  colormat <- DitherImageC(xmas[, , color])$New_Colors
+  newcolormat[, , color] <- colormat
+}
+```
+
+Last minute I discovered that the function unfortunately outputs values that exceed 1. Since Maarten told me I should not spend too much time on this bonus exercise, I decided to go for the ugly fix:
+
+```{r}
+newcolormat[newcolormat > 1] <- 1
+```
+
+Write image to PNG to see whether it succeeded (code will not be evaluated, so the picture will not be automatically included in the `.Rmd`-file).
+
+```{r}
+writePNG(newcolormat, "0_img/ditherC_03bit_img.png")
+```
+
+**IMPORTANT NOTE** 
+The dithering part of the above code is obtained from this JEFworks (GitHub), See: *[website](https://gist.github.com/JEFworks/637308c2a1dd8a6faff7b6264104847a)*.
+
