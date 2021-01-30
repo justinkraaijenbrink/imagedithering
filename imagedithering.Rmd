@@ -30,15 +30,13 @@ library("tidyverse")
 library("png")
 ```
 
-Read in image:
+# Read in image:
 ```{r, eval = TRUE}
 quokka <- png::readPNG(source = "0_img/quokka.png", native = FALSE) 
 quokka <- quokka[, , -4] # first three matrices only
 ```
 
-# 1 About Colors: A Picture = A Data set.
-
-## 1.1
+# Check how pixel (600, 10) looks like:
 ```{r, eval = TRUE}
 pixelcols <- quokka[600, 10, ]
 
@@ -49,8 +47,7 @@ pixel
 
 This pixel will be black! 
 
-
-## 1.2 
+# Create a tibble with all pixel values stored and the corresponding RGB-color:
 ```{r, eval = TRUE}
 quokka_df <- tibble(row = rep(1:nrow(quokka), ncol(quokka)),
             col = rep(1:ncol(quokka), each = nrow(quokka)),
@@ -61,52 +58,18 @@ quokka_df <- tibble(row = rep(1:nrow(quokka), ncol(quokka)),
 ```
 
 
-## 1.3 
-Check if the number of values in character variable `rgb_color` is equal to the
-number of observed combinations of `red`, `green` and `blue`. 
-```{r, eval = TRUE}
-unique_combs <- quokka_df %>%
-  select("red", "green", "blue") %>% 
-  unite(., "all_combs", sep = "-")%>% 
-  unique() %>% 
-  nrow()
-
-unique_cols <- quokka_df %>%
-  select("rgb_color") %>% 
-  unique() %>% 
-  nrow()
-
-unique_combs == unique_cols
-```
-
-The `TRUE` in the output hopefully speaks for itself!
-
-## 1.4
-Create a raster to plot picture in R:
+# Plot the picture and save to folder:
 ```{r, eval = TRUE}
 quokka_img <- matrix(quokka_df$rgb_color, 
                      nrow = nrow(quokka), 
                      ncol = ncol(quokka)) %>% as.raster()
-```
 
-```{r, eval = TRUE}
 png("0_img/quokka_img.png", width = ncol(quokka), height = nrow(quokka), units = "px")
 par(mar = c(0, 0, 0, 0))
 plot(quokka_img)
 dev.off()
 ```
 
-\begin{center}
-\includegraphics[height = 5cm]{0_img/quokka_img.png}
-\end{center}
-
-Such a cute animal!
-
-\clearpage
-
-# 2 A Further Understanding of the RGB Space
-
-## 2.1
 Program own RGB-function:
 ```{r, eval = TRUE}
 CreateRGBColors <- function(red, green, blue, maxValue = 1){
@@ -148,15 +111,13 @@ CreateRGBColors <- function(red, green, blue, maxValue = 1){
 }
 ```
 
-I decided to design the function such that the output resembles the output from the `rgb()` function (that displays an error when the color intensities are not in [0, 1], but `maxColorValue` is). 
-
 Show that both functions give the same output:
 ```{r}
 identical(CreateRGBColors(0.5, 0.3, 0.7, maxValue = 1), 
           rgb(0.5, 0.3, 0.7, maxColorValue = 1))
 ```
 
-## 2.2
+# Write function to create smaller color palette:
 ```{r, eval = TRUE}
 CreatePalette <- function(K){
   
@@ -198,18 +159,7 @@ CreatePalette <- function(K){
 }
 ```
 
-## 2.3
-
-### 2.3a
-I decided to put the code into a function, so that we can easily adjust things such as the number of bits.
-Input for the function is:
-
-1. an image (array)
-2. number of bits you want the picture to be compressed to
-3. maxValue (indicates whether the intensities are in [0, 1] or in [0, 255])
-
-The function output is a new array (`dim = c(382, 513, 3)`) with the compressed intensities. 
-
+Find closest color:
 ```{r, eval = TRUE}
 FindClosestPaletteColor <- function(picture, n_bit, maxValue = 1){
   if(maxValue != 1 & maxValue != 255){
@@ -237,26 +187,17 @@ FindClosestPaletteColor <- function(picture, n_bit, maxValue = 1){
 }
 ```
 
-### 2.3b 
-
+# Create 3-bit image:
 ```{r, eval = TRUE}
 quokka_03bit <- FindClosestPaletteColor(n_bit = 3, 
                                         picture = quokka, 
                                         maxValue = 1) / 255
-```
 
-```{r, eval = TRUE}
 writePNG(quokka_03bit, "0_img/quokka_03bit.png")
 ```
 
 
-# 3 Floyd-Steinberg dithering algorithm
-
-## 3.1 
-
-First, I create a Loss-function which takes as input a pixel (vector with length 3) and the number of bits you want to compress your picture to.
-This function can be used in the DitherImage-function.
-
+# Floyd-Steinberg dithering algorithm:
 ```{r}
 LossFunction <- function(pixel, col_palette = col_palette){
   ind <- which.min(rowSums(t(pixel - t(col_palette))^2))
@@ -266,8 +207,6 @@ LossFunction <- function(pixel, col_palette = col_palette){
   return(newpixel)
 }
 ```
-
-Creating the `DitherImage`-function, with the image-array and number of bits as inputs:
 
 ```{r}
 DitherImage <- function(picture, n_bit){
@@ -294,17 +233,21 @@ DitherImage <- function(picture, n_bit){
 
   col_oldpixels <- pixels[, ncol(pixels), ]
   col_newpixels <- matrix(nrow = nrow(col_oldpixels), ncol = ncol(col_oldpixels))
+  
   for(i in 1:nrow(col_oldpixels)){
     col_newpixels[i, ] <- LossFunction(col_oldpixels[i, ], col_palette)
   }
+  
   pixels[, ncol(pixels), ] <- col_newpixels
   quant_error[, ncol(pixels), ] <- col_oldpixels - col_newpixels
 
   row_oldpixels <- pixels[nrow(pixels), , ]
   row_newpixels <- matrix(nrow = nrow(row_oldpixels), ncol = ncol(row_oldpixels))
+  
   for(i in 1:nrow(row_oldpixels)){
     row_newpixels[i, ] <- LossFunction(row_oldpixels[i, ], col_palette)
   }
+  
   pixels[nrow(pixels), , ] <- row_newpixels
   quant_error[nrow(pixels), , ] <- row_oldpixels - row_newpixels
   
@@ -316,10 +259,14 @@ DitherImage <- function(picture, n_bit){
 }
 ```
 
-To see whether my results are (approximately) the same as the modelanswers for the 3-bit image:
-
+# Save dithered images:
 ```{r}
 dithered_03 <- DitherImage(quokka, n_bit = 3)
 writePNG(dithered_03$New_Colors, "0_img/quokka_dithered_03.png")
+```
+
+```{r}
+dithered_06 <- DitherImage(quokka, n_bit = 6)
+writePNG(dithered_06$New_Colors, "0_img/quokka_dithered_06.png")
 ```
 
